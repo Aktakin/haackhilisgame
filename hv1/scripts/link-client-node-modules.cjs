@@ -1,35 +1,39 @@
 /**
- * Vercel installs deps only under hv1/, but Vite bundles ../client/src.
- * Node resolves packages from client/node_modules — create a symlink on CI.
+ * hv1 imports ../client/src, but Vercel only npm-installs inside hv1/.
+ * Node/Vite resolve bare imports (styled-components, react, …) from
+ * client/node_modules. Create that folder from hv1/node_modules when missing.
  */
 const fs = require('fs')
 const path = require('path')
 
 const hv1Root = path.join(__dirname, '..')
 const repoRoot = path.join(hv1Root, '..')
-const hv1NodeModules = path.join(hv1Root, 'node_modules')
-const clientNodeModules = path.join(repoRoot, 'client', 'node_modules')
+const source = path.join(hv1Root, 'node_modules')
+const target = path.join(repoRoot, 'client', 'node_modules')
 
-if (!fs.existsSync(hv1NodeModules)) {
+if (!fs.existsSync(source)) {
   console.warn('[link-client-node-modules] hv1/node_modules missing; skipping')
   process.exit(0)
 }
 
-if (fs.existsSync(clientNodeModules)) {
-  try {
-    const stat = fs.lstatSync(clientNodeModules)
-    if (stat.isSymbolicLink()) {
-      console.log('[link-client-node-modules] client/node_modules symlink already exists')
-      process.exit(0)
-    }
-    console.log('[link-client-node-modules] client/node_modules exists (local dev); skipping')
-    process.exit(0)
-  } catch {
+if (fs.existsSync(target)) {
+  const stat = fs.lstatSync(target)
+  const styled = path.join(target, 'styled-components')
+  if (stat.isDirectory() && !stat.isSymbolicLink() && fs.existsSync(styled)) {
+    console.log('[link-client-node-modules] client/node_modules already present; skipping')
     process.exit(0)
   }
+  fs.rmSync(target, { recursive: true, force: true })
 }
 
-fs.mkdirSync(path.join(repoRoot, 'client'), { recursive: true })
-const linkType = process.platform === 'win32' ? 'junction' : 'dir'
-fs.symlinkSync(hv1NodeModules, clientNodeModules, linkType)
-console.log('[link-client-node-modules] linked client/node_modules -> hv1/node_modules')
+fs.mkdirSync(path.dirname(target), { recursive: true })
+
+try {
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+  fs.symlinkSync(source, target, linkType)
+  console.log('[link-client-node-modules] symlink client/node_modules -> hv1/node_modules')
+} catch (err) {
+  console.warn('[link-client-node-modules] symlink failed, copying:', err.message)
+  fs.cpSync(source, target, { recursive: true, dereference: true })
+  console.log('[link-client-node-modules] copied hv1/node_modules to client/node_modules')
+}

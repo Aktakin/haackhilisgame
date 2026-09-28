@@ -24,15 +24,28 @@ function isClientSource(id) {
   return id.replace(/\\/g, '/').includes('/client/src/')
 }
 
+function importerPath(importer) {
+  if (!importer) return ''
+  if (importer.startsWith('file://')) {
+    try {
+      return fileURLToPath(importer)
+    } catch {
+      return importer
+    }
+  }
+  return importer
+}
+
 /** Force bare imports in client/ to resolve via hv1's node_modules (Rollup-safe). */
 function resolveClientImportsFromHv1() {
   return {
     name: 'resolve-client-imports-from-hv1',
     enforce: 'pre',
     resolveId(source, importer) {
-      if (!importer || !isClientSource(importer)) return null
-      if (source.startsWith('.') || source.startsWith('\0')) return null
-      if (source.startsWith('node:')) return null
+      if (!source || source.startsWith('.') || source.startsWith('\0')) return null
+      if (source.startsWith('node:') || source.startsWith('file:') || path.isAbsolute(source)) return null
+      const from = importerPath(importer)
+      if (!isClientSource(from)) return null
       try {
         return require.resolve(source, { paths: [hv1Root] })
       } catch {
@@ -41,6 +54,8 @@ function resolveClientImportsFromHv1() {
     }
   }
 }
+
+console.log('[hv1] vite.config: resolving client imports from', path.join(hv1Root, 'node_modules'))
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -59,6 +74,12 @@ export default defineConfig({
       loader: {
         '.js': 'jsx'
       }
+    }
+  },
+  build: {
+    rollupOptions: {
+      preserveSymlinks: false,
+      plugins: [resolveClientImportsFromHv1()]
     }
   },
   server: {
