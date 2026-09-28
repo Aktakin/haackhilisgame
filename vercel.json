@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "buildCommand": "cd hv1 && npm install --include=dev && npm run build",
+  "buildCommand": "cd hv1 && npm install --include=dev && node scripts/link-client-node-modules.cjs && npm run build",
   "outputDirectory": "hv1/dist",
   "installCommand": "echo skip-root-install",
   "rewrites": [

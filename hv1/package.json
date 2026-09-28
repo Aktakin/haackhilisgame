@@ -6,7 +6,8 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "build": "vite build",
+    "postinstall": "node scripts/link-client-node-modules.cjs",
+    "build": "node scripts/link-client-node-modules.cjs && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
