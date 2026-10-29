@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import { readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'node:module'
 
@@ -9,59 +9,69 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const hv1Root = __dirname
 const repoRoot = path.resolve(hv1Root, '..')
 const hv1Pkg = JSON.parse(readFileSync(path.join(hv1Root, 'package.json'), 'utf8'))
-const require = createRequire(path.join(hv1Root, 'package.json'))
+const requireFromHv1 = createRequire(path.join(hv1Root, 'package.json'))
 
-/** Client code lives in ../client; Vercel only installs hv1/node_modules. */
 const runtimeDeps = Object.keys(hv1Pkg.dependencies || {}).filter(
   (name) => name !== 'vite' && !name.startsWith('@vitejs/')
 )
 
-const clientNodeModulesAlias = Object.fromEntries(
-  runtimeDeps.map((name) => [name, path.join(hv1Root, 'node_modules', name)])
-)
-
-function isClientSource(id) {
-  return id.replace(/\\/g, '/').includes('/client/src/')
+function packageRoot(name) {
+  return path.join(hv1Root, 'node_modules', name)
 }
 
-function importerPath(importer) {
-  if (!importer) return ''
-  if (importer.startsWith('file://')) {
-    try {
-      return fileURLToPath(importer)
-    } catch {
-      return importer
-    }
+/** Map bare package names (and subpaths) to hv1/node_modules. */
+const alias = [
+  ...runtimeDeps.flatMap((name) => {
+    const root = packageRoot(name)
+    return [
+      { find: new RegExp(`^${name}$`), replacement: root },
+      { find: new RegExp(`^${name}/(.*)$`), replacement: `${root}/$1` }
+    ]
+  })
+]
+
+function resolveFromHv1(source) {
+  try {
+    return requireFromHv1.resolve(source)
+  } catch {
+    const bare = runtimeDeps.find((d) => source === d || source.startsWith(`${d}/`))
+    if (!bare) return null
+    const root = packageRoot(bare)
+    if (!existsSync(root)) return null
+    if (source === bare) return root
+    return path.join(root, source.slice(bare.length + 1))
   }
-  return importer
 }
 
-/** Force bare imports in client/ to resolve via hv1's node_modules (Rollup-safe). */
-function resolveClientImportsFromHv1() {
+/**
+ * Force every bare import of hv1 runtime deps to resolve from hv1/node_modules,
+ * regardless of whether the importer lives under client/ or hv1/.
+ */
+function forceHv1Deps() {
   return {
-    name: 'resolve-client-imports-from-hv1',
+    name: 'force-hv1-deps',
     enforce: 'pre',
-    resolveId(source, importer) {
-      if (!source || source.startsWith('.') || source.startsWith('\0')) return null
-      if (source.startsWith('node:') || source.startsWith('file:') || path.isAbsolute(source)) return null
-      const from = importerPath(importer)
-      if (!isClientSource(from)) return null
-      try {
-        return require.resolve(source, { paths: [hv1Root] })
-      } catch {
+    resolveId(source) {
+      if (!source || source.startsWith('.') || source.startsWith('\0') || source.startsWith('/')) {
         return null
       }
+      if (source.startsWith('node:') || source.startsWith('file:') || path.isAbsolute(source)) {
+        return null
+      }
+      const matched = runtimeDeps.some((d) => source === d || source.startsWith(`${d}/`))
+      if (!matched) return null
+      return resolveFromHv1(source)
     }
   }
 }
 
-console.log('[hv1] vite.config: resolving client imports from', path.join(hv1Root, 'node_modules'))
+console.log('[hv1] vite resolve root:', path.join(hv1Root, 'node_modules'))
+console.log('[hv1] styled-components present:', existsSync(packageRoot('styled-components')))
 
-// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [resolveClientImportsFromHv1(), react({ include: /\.[jt]sx?$/ })],
+  plugins: [forceHv1Deps(), react({ include: /\.[jt]sx?$/ })],
   resolve: {
-    alias: clientNodeModulesAlias,
+    alias,
     dedupe: runtimeDeps
   },
   esbuild: {
@@ -70,6 +80,7 @@ export default defineConfig({
     exclude: []
   },
   optimizeDeps: {
+    include: runtimeDeps,
     esbuildOptions: {
       loader: {
         '.js': 'jsx'
@@ -77,9 +88,11 @@ export default defineConfig({
     }
   },
   build: {
+    commonjsOptions: {
+      include: [/node_modules/, /client\/src/]
+    },
     rollupOptions: {
-      preserveSymlinks: false,
-      plugins: [resolveClientImportsFromHv1()]
+      plugins: [forceHv1Deps()]
     }
   },
   server: {
